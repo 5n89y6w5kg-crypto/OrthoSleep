@@ -209,6 +209,7 @@ function renderTopbar() {
     dashboard: ['Главная', S.profile?.full_name || ''],
     pipeline: ['Воронка продаж', 'Сделки по этапам'],
     clients: ['Клиенты', 'База клиентов'],
+    calculator: ['Калькулятор цены', 'Расчёт по размеру и скидке'],
     products: ['Склад', 'Товары и остатки'],
     orders: ['Заказы', 'Оплата и доставка'],
     settings: ['Настройки', S.profile?.role === 'admin' ? 'Администратор' : 'Менеджер'],
@@ -243,6 +244,7 @@ function renderBottomNav() {
     { id: 'dashboard', icon: '🏠', label: 'Главная' },
     { id: 'pipeline', icon: '📊', label: 'Воронка' },
     { id: 'clients', icon: '👥', label: 'Клиенты' },
+    { id: 'calculator', icon: '🧮', label: 'Калькулятор' },
     { id: 'products', icon: '🛏️', label: 'Склад' },
     { id: 'orders', icon: '📦', label: 'Заказы' },
   ];
@@ -278,6 +280,7 @@ async function loadRouteContent() {
       case 'dashboard': html = await renderDashboard(); break;
       case 'pipeline': html = await renderPipeline(); break;
       case 'clients': html = await renderClients(); break;
+      case 'calculator': html = await renderCalculator(); break;
       case 'client_detail': html = await renderClientDetail(S.routeParams.id); break;
       case 'deal_detail': html = await renderDealDetail(S.routeParams.id); break;
       case 'products': html = await renderProducts(); break;
@@ -1007,7 +1010,10 @@ function openCreateProductSheet() {
       <div class="field"><label>Категория</label><select id="new-prod-category"><option value="">— не указана —</option>${catOptions}</select></div>
       <div class="field"><label>Размер</label><input type="text" id="new-prod-size" placeholder="напр. 160x200"></div>
       <div class="field"><label>Закупочная цена</label><input type="number" id="new-prod-cost" placeholder="0"></div>
-      <div class="field"><label>Цена продажи *</label><input type="number" id="new-prod-price" placeholder="0"></div>
+      <div class="field"><label>Цена продажи (база, 180 см) *</label><input type="number" id="new-prod-price" placeholder="0"></div>
+      <div class="field"><label>Цена за 1 см ширины (для расчёта под любой размер)</label><input type="number" id="new-prod-pricepercm" placeholder="напр. 19.4" step="0.1"></div>
+      <div class="field"><label>Минимальная цена продажи (нельзя продавать ниже)</label><input type="number" id="new-prod-minprice" placeholder="0"></div>
+      <div class="field"><label>Максимальная скидка, %</label><input type="number" id="new-prod-maxdiscount" value="20"></div>
       <div class="field"><label>Начальный остаток (шт)</label><input type="number" id="new-prod-stock" placeholder="0"></div>
       <div class="field"><label>Минимальный остаток (для предупреждений)</label><input type="number" id="new-prod-minstock" value="2"></div>
     </div>
@@ -1030,6 +1036,11 @@ async function submitCreateProduct() {
       size: document.getElementById('new-prod-size').value.trim() || null,
       cost_price: parseFloat(document.getElementById('new-prod-cost').value) || 0,
       sale_price: price,
+      price_per_cm: parseFloat(document.getElementById('new-prod-pricepercm').value) || null,
+      min_price: parseFloat(document.getElementById('new-prod-minprice').value) || null,
+      max_discount_percent: parseFloat(document.getElementById('new-prod-maxdiscount').value) || 20,
+      base_width: 180,
+      base_length: 200,
       stock_qty: stockQty,
       min_stock_qty: parseInt(document.getElementById('new-prod-minstock').value) || 2,
     };
@@ -1055,7 +1066,10 @@ function openEditProductSheet(id) {
       <div class="field"><label>Название</label><input type="text" id="edit-prod-name" value="${escapeHtml(p.name)}"></div>
       <div class="field"><label>Размер</label><input type="text" id="edit-prod-size" value="${escapeHtml(p.size || '')}"></div>
       <div class="field"><label>Закупочная цена</label><input type="number" id="edit-prod-cost" value="${p.cost_price}"></div>
-      <div class="field"><label>Цена продажи</label><input type="number" id="edit-prod-price" value="${p.sale_price}"></div>
+      <div class="field"><label>Цена продажи (база, 180 см)</label><input type="number" id="edit-prod-price" value="${p.sale_price}"></div>
+      <div class="field"><label>Цена за 1 см ширины</label><input type="number" id="edit-prod-pricepercm" value="${p.price_per_cm || ''}" step="0.1"></div>
+      <div class="field"><label>Минимальная цена продажи</label><input type="number" id="edit-prod-minprice" value="${p.min_price || ''}"></div>
+      <div class="field"><label>Максимальная скидка, %</label><input type="number" id="edit-prod-maxdiscount" value="${p.max_discount_percent || 20}"></div>
       <div class="field"><label>Минимальный остаток</label><input type="number" id="edit-prod-minstock" value="${p.min_stock_qty}"></div>
     </div>
     <div class="sheet-footer">
@@ -1072,6 +1086,9 @@ async function submitEditProduct(id) {
       size: document.getElementById('edit-prod-size').value.trim() || null,
       cost_price: parseFloat(document.getElementById('edit-prod-cost').value) || 0,
       sale_price: parseFloat(document.getElementById('edit-prod-price').value) || 0,
+      price_per_cm: parseFloat(document.getElementById('edit-prod-pricepercm').value) || null,
+      min_price: parseFloat(document.getElementById('edit-prod-minprice').value) || null,
+      max_discount_percent: parseFloat(document.getElementById('edit-prod-maxdiscount').value) || 20,
       min_stock_qty: parseInt(document.getElementById('edit-prod-minstock').value) || 2,
     };
     const { error } = await sb.from('products').update(payload).eq('id', id);
@@ -1300,6 +1317,11 @@ async function renderSettings() {
         <div style="margin-top:6px;"><span class="badge" style="background:var(--gold-bg);color:var(--gold);">${isAdmin ? 'Администратор' : 'Менеджер'}</span></div>
       </div>
 
+      <div class="theme-toggle" onclick="toggleTheme()">
+        <span style="font-weight:600;font-size:13.5px;">🌗 Тёмная / светлая тема</span>
+        <div class="theme-switch"><div class="knob"></div></div>
+      </div>
+
       ${managersHtml}
 
       <div class="section-title">Приложение</div>
@@ -1316,4 +1338,191 @@ async function renderSettings() {
 
 function confirmLogout() {
   if (confirm('Выйти из аккаунта?')) logout();
+}
+
+// ============================================
+// КАЛЬКУЛЯТОР ЦЕНЫ ПО РАЗМЕРУ
+// ============================================
+
+let _calcState = { width: 180, discountPercent: 0 };
+
+async function renderCalculator() {
+  const { data: products, error } = await sb.from('products').select('*').eq('is_active', true).order('name');
+  if (error) throw error;
+  S.cache.allProducts = products;
+
+  const calcableProducts = products.filter(p => p.price_per_cm);
+  const noCalcProducts = products.filter(p => !p.price_per_cm);
+
+  return `
+    <div class="page">
+      <div class="calc-input-card">
+        <div style="font-size:12px;color:var(--text-dim);font-weight:600;margin-bottom:8px;">РАЗМЕР МАТРАСА (СМ)</div>
+        <div class="calc-size-row">
+          <input type="number" id="calc-width" value="${_calcState.width}" placeholder="Ширина" oninput="onCalcInputChange()">
+          <span class="x">×</span>
+          <input type="number" id="calc-length" value="200" placeholder="Длина">
+        </div>
+        <div style="font-size:11px;color:var(--text-faint);margin-top:6px;">Длина обычно фиксирована — 200 см</div>
+
+        <div style="font-size:12px;color:var(--text-dim);font-weight:600;margin:16px 0 8px;">СКИДКА</div>
+        <div class="calc-discount-row">
+          <button class="discount-chip ${_calcState.discountPercent === 0 ? 'active' : ''}" onclick="setCalcDiscount(0)">Без скидки</button>
+          <button class="discount-chip ${_calcState.discountPercent === 10 ? 'active' : ''}" onclick="setCalcDiscount(10)">−10%</button>
+          <button class="discount-chip ${_calcState.discountPercent === 15 ? 'active' : ''}" onclick="setCalcDiscount(15)">−15%</button>
+          <button class="discount-chip ${_calcState.discountPercent === 20 ? 'active' : ''}" onclick="setCalcDiscount(20)">−20%</button>
+        </div>
+        <div style="margin-top:10px;">
+          <input type="number" id="calc-custom-discount" placeholder="Своя скидка, %" value="${[0,10,15,20].includes(_calcState.discountPercent) ? '' : _calcState.discountPercent}" oninput="setCalcDiscount(parseFloat(this.value)||0, true)">
+        </div>
+      </div>
+
+      <div class="section-title">Цена по моделям</div>
+      <div id="calc-results">
+        ${renderCalcResults(calcableProducts)}
+      </div>
+
+      ${noCalcProducts.length ? `
+        <div class="section-title">Без формулы расчёта</div>
+        <div style="font-size:12px;color:var(--text-faint);margin-bottom:8px;">У этих товаров не задана «цена за 1 см» — добавь её в карточке товара на складе, чтобы они считались автоматически.</div>
+        ${noCalcProducts.map(p => `<div class="card" onclick="navigate('products')">${escapeHtml(p.name)} — ${fmtMoney(p.sale_price)} (фикс.)</div>`).join('')}
+      ` : ''}
+    </div>
+  `;
+}
+
+function onCalcInputChange() {
+  _calcState.width = parseFloat(document.getElementById('calc-width').value) || 0;
+  recalcCalculator();
+}
+
+function setCalcDiscount(percent, fromCustom = false) {
+  _calcState.discountPercent = percent;
+  if (!fromCustom) document.getElementById('calc-custom-discount').value = '';
+  recalcCalculator();
+}
+
+function recalcCalculator() {
+  const products = (S.cache.allProducts || []).filter(p => p.price_per_cm);
+  document.getElementById('calc-results').innerHTML = renderCalcResults(products);
+  // обновляем активные чипы
+  document.querySelectorAll('.discount-chip').forEach((el, i) => {
+    const vals = [0, 10, 15, 20];
+    el.classList.toggle('active', vals[i] === _calcState.discountPercent);
+  });
+}
+
+function renderCalcResults(products) {
+  const width = _calcState.width || 0;
+  if (!width) return `<div class="empty-state" style="padding:24px;"><div class="sub">Введи ширину матраса, чтобы увидеть цены</div></div>`;
+
+  const results = products.map(p => {
+    const rawPrice = p.price_per_cm * width;
+    const discounted = rawPrice * (1 - _calcState.discountPercent / 100);
+    const minPrice = p.min_price || 0;
+    const belowMin = minPrice > 0 && discounted < minPrice;
+    const maxAllowed = p.max_discount_percent || 20;
+    const exceedsMax = _calcState.discountPercent > maxAllowed;
+    return { product: p, rawPrice, discounted, belowMin, exceedsMax, maxAllowed };
+  }).sort((a, b) => a.discounted - b.discounted);
+
+  if (!results.length) return `<div class="empty-state" style="padding:24px;"><div class="sub">Нет товаров с заданной ценой за см</div></div>`;
+
+  const cheapest = results[0];
+
+  return results.map(r => `
+    <div class="calc-result-card ${r === cheapest ? 'best' : ''}">
+      <div>
+        <div class="model-name">${escapeHtml(r.product.name)}</div>
+        <div class="model-sub">${width} × 200 см ${r.product.price_per_cm ? '· ' + r.product.price_per_cm + ' сом/см' : ''}</div>
+        ${r.exceedsMax ? `<div class="calc-warning">⚠️ Скидка выше максимума (${r.maxAllowed}%)</div>` : ''}
+        ${r.belowMin ? `<div class="calc-warning">⚠️ Ниже минимальной цены (${fmtMoney(r.product.min_price)})</div>` : ''}
+      </div>
+      <div style="text-align:right;">
+        ${_calcState.discountPercent > 0 ? `<div class="price-old">${fmtMoney(r.rawPrice)}</div>` : ''}
+        <div class="price">${fmtMoney(r.discounted)}</div>
+        <button style="margin-top:6px;background:var(--violet-bg);border:1px solid var(--violet);color:var(--violet);border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;" onclick="attachCalcResultToDeal(${r.product.id},'${escapeHtml(r.product.name).replace(/'/g,"\\'")}',${r.discounted.toFixed(2)},${width})">В сделку →</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function attachCalcResultToDeal(productId, productName, price, width) {
+  openSheet(`
+    <div class="sheet-header"><h3>Добавить в сделку</h3><button class="close-x" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body">
+      <div class="card">
+        <div style="font-weight:600;">${escapeHtml(productName)} (${width}×200)</div>
+        <div style="color:var(--accent);font-weight:700;margin-top:4px;">${fmtMoney(price)}</div>
+      </div>
+      <div class="field" style="margin-top:12px;">
+        <label>Клиент</label>
+        <input type="text" id="calc-deal-client-search" placeholder="Начни вводить имя или телефон..." oninput="searchClientsForCalcDeal(this.value)">
+        <div id="calc-deal-client-results"></div>
+      </div>
+      <div id="calc-deal-selected-client"></div>
+    </div>
+    <div class="sheet-footer">
+      <button class="btn-primary" onclick="submitCalcDealAttach(${productId},'${escapeHtml(productName).replace(/'/g,"\\'")}',${price})">Создать сделку с этим товаром</button>
+    </div>
+  `);
+}
+
+let _calcDealClientId = null;
+
+async function searchClientsForCalcDeal(query) {
+  const box = document.getElementById('calc-deal-client-results');
+  if (!query || query.length < 2) { box.innerHTML = ''; return; }
+  const { data } = await sb.from('clients').select('id,full_name,phone').or(`full_name.ilike.%${query}%,phone.ilike.%${query}%`).limit(5);
+  box.innerHTML = (data || []).map(c => `
+    <button class="card" style="width:100%;text-align:left;margin-top:6px;" onclick="selectClientForCalcDeal(${c.id},'${escapeHtml(c.full_name).replace(/'/g,"\\'")}')">
+      <div style="font-weight:600;font-size:13.5px;">${escapeHtml(c.full_name)}</div>
+      <div style="font-size:12px;color:var(--text-dim);">${escapeHtml(c.phone || '')}</div>
+    </button>
+  `).join('') || `<div style="font-size:12px;color:var(--text-faint);padding:8px 0;">Не найдено</div>`;
+}
+
+function selectClientForCalcDeal(id, name) {
+  _calcDealClientId = id;
+  document.getElementById('calc-deal-client-results').innerHTML = '';
+  document.getElementById('calc-deal-client-search').value = name;
+  document.getElementById('calc-deal-selected-client').innerHTML = `<div style="font-size:12px;color:var(--accent);margin-bottom:6px;">✓ Выбран клиент: ${escapeHtml(name)}</div>`;
+}
+
+async function submitCalcDealAttach(productId, productName, price) {
+  if (!_calcDealClientId) { showToast('Выбери клиента из списка', 'error'); return; }
+  await withLoading(async () => {
+    const firstStage = S.stages[0];
+    const { data: deal, error } = await sb.from('deals').insert({
+      client_id: _calcDealClientId,
+      stage_id: firstStage.id,
+      title: productName,
+      amount: price,
+      assigned_to: S.user.id,
+    }).select().single();
+    if (error) throw error;
+
+    await sb.from('deal_items').insert({ deal_id: deal.id, product_id: productId, qty: 1, price });
+    await sb.from('interactions').insert({
+      client_id: _calcDealClientId, deal_id: deal.id, type: 'system',
+      content: `Создана сделка через калькулятор: ${productName} — ${fmtMoney(price)}`, created_by: S.user.id,
+    });
+
+    _calcDealClientId = null;
+    closeSheet();
+    showToast('Сделка создана');
+    navigate('deal_detail', { id: deal.id });
+  });
+}
+
+// ============================================
+// ПЕРЕКЛЮЧЕНИЕ ТЕМЫ
+// ============================================
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme') || 'dark';
+  const next = current === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('orthosleep_theme', next);
+  render();
 }
