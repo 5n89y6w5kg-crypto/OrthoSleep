@@ -1,0 +1,9 @@
+{
+  "name": "OrthoSleep CRM",
+  "short_name": "OrthoSleep",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0a0e16",
+  "theme_color": "#0a0e16",
+  "icons": []
+}
